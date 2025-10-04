@@ -12,7 +12,7 @@ const JIRA_PROJECT_KEY = SCRIPT_PROPERTIES.getProperty('JIRA_PROJECT_KEY');
  * @returns {Array} - 取得した課題の配列
  */
 function fetchJiraIssues(jql) {
-    const url = `https://${JIRA_DOMAIN}/rest/api/3/search`;
+    const url = `https://${JIRA_DOMAIN}/rest/api/3/search/jql`; // エンドポイントを新しいものに変更
     const encodedToken = Utilities.base64Encode(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`);
 
     const headers = {
