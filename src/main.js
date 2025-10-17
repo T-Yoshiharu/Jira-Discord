@@ -116,21 +116,21 @@ function notifyTasksFor830() {
     const messages = [];
 
     // 1. 期限切れのタスク
-    const expiredIssues = fetchJiraIssues(`duedate < startOfDay()`);
+    const expiredIssues = fetchJiraIssues(`due < now()`);
     if (expiredIssues.length > 0) {
         messages.push(createDiscordMessage(expiredIssues, '🚨【期限切れ】のタスク'));
     }
 
     // 2. 当日が期限のタスク
-    const todayIssues = fetchJiraIssues(`duedate >= startOfDay() AND duedate <= endOfDay()`);
+    const todayIssues = fetchJiraIssues(`due = now()`);
     if (todayIssues.length > 0) {
         messages.push(createDiscordMessage(todayIssues, '🔥【本日が期限】のタスク'));
     }
 
-    // 3. 昨日が期限だったタスク（リマインド用）
-    const yesterdayIssues = fetchJiraIssues(`duedate >= startOfDay(1) AND duedate <= endOfDay(1)`);
-    if (yesterdayIssues.length > 0) {
-        messages.push(createDiscordMessage(yesterdayIssues, '⏰【明日が期限】のタスク'));
+    // 3. 明日が期限のタスク（リマインド用）
+    const tomorrowIssues = fetchJiraIssues(`due = "1d"`);
+    if (tomorrowIssues.length > 0) {
+        messages.push(createDiscordMessage(tomorrowIssues, '⏰【明日が期限】のタスク'));
     }
 
     // メッセージを送信
@@ -144,13 +144,13 @@ function notifyTasksFor930() {
     const messages = [];
 
     // 1. 3日後が期限のタスク
-    const threeDaysIssues = fetchJiraIssues(`duedate >= startOfDay(3) AND duedate <= endOfDay(3)`);
+    const threeDaysIssues = fetchJiraIssues(`due = "3d"`);
     if (threeDaysIssues.length > 0) {
         messages.push(createDiscordMessage(threeDaysIssues, '🗓️【3日後が期限】のタスク'));
     }
 
     // 2. 1週間後が期限のタスク
-    const sevenDaysIssues = fetchJiraIssues(`duedate >= startOfDay(7) AND duedate <= endOfDay(7)`);
+    const sevenDaysIssues = fetchJiraIssues(`due = "7d"`);
     if (sevenDaysIssues.length > 0) {
         messages.push(createDiscordMessage(sevenDaysIssues, '🗓️【1週間後が期限】のタスク'));
     }
