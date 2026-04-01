@@ -1,3 +1,5 @@
+// TypeScriptで作成
+
 // ==========================================
 // 1. 型定義（インターフェース）
 // データの「形」をあらかじめ定義します
@@ -147,12 +149,15 @@ function sendToDiscord(payload: DiscordPayload | null): void {
 function notifyTasksFor830(): void {
     const messages: (DiscordPayload | null)[] = [];
 
+    // 1. 期限切れのタスク
     const expiredIssues = fetchJiraIssues(`duedate < startOfDay()`);
     if (expiredIssues.length > 0) messages.push(createDiscordMessage(expiredIssues, '🚨【期限切れ】のタスク'));
 
+    // 2. 当日が期限のタスク
     const todayIssues = fetchJiraIssues(`duedate >= startOfDay() AND duedate <= endOfDay()`);
     if (todayIssues.length > 0) messages.push(createDiscordMessage(todayIssues, '🔥【本日が期限】のタスク'));
 
+    // 3. 明日が期限のタスク（リマインド用）
     const yesterdayIssues = fetchJiraIssues(`duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)`);
     if (yesterdayIssues.length > 0) messages.push(createDiscordMessage(yesterdayIssues, '⏰【昨日が期限】だったタスク'));
 
@@ -167,9 +172,11 @@ function notifyTasksFor830(): void {
 function notifyTasksFor930(): void {
     const messages: (DiscordPayload | null)[] = [];
 
+    // 1. 3日後が期限のタスク
     const threeDaysIssues = fetchJiraIssues(`duedate >= startOfDay(3) AND duedate <= endOfDay(3)`);
     if (threeDaysIssues.length > 0) messages.push(createDiscordMessage(threeDaysIssues, '🗓️【3日後が期限】のタスク'));
 
+    // 2. 1週間後が期限のタスク
     const sevenDaysIssues = fetchJiraIssues(`duedate >= startOfDay(7) AND duedate <= endOfDay(7)`);
     if (sevenDaysIssues.length > 0) messages.push(createDiscordMessage(sevenDaysIssues, '🗓️【1週間後が期限】のタスク'));
 

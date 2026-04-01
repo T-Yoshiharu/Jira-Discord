@@ -1,27 +1,36 @@
-// スクリプトプロパティから設定を読み込む
+"use strict";
+// TypeScriptで作成
+
+// ==========================================
+// 2. 設定の読み込み
+// ==========================================
+
 const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
+// 💡 as string をつけることで、「これは確実に文字列です」とTypeScriptに教えています
 const JIRA_DOMAIN = SCRIPT_PROPERTIES.getProperty('JIRA_DOMAIN');
 const JIRA_EMAIL = SCRIPT_PROPERTIES.getProperty('JIRA_EMAIL');
 const JIRA_API_TOKEN = SCRIPT_PROPERTIES.getProperty('JIRA_API_TOKEN');
 const DISCORD_WEBHOOK_URL = SCRIPT_PROPERTIES.getProperty('DISCORD_WEBHOOK_URL');
 const JIRA_PROJECT_KEY = SCRIPT_PROPERTIES.getProperty('JIRA_PROJECT_KEY');
 
+// ==========================================
+// 3. メインの処理関数
+// ==========================================
+
 /**
  * Jira APIにリクエストを送信する共通関数
- * @param {string} jql - Jira Query Language (JQL)
- * @returns {Array} - 取得した課題の配列
+ * @param jql - Jira Query Language (JQL)
+ * @returns 取得した課題の配列（JiraIssueの配列）
  */
 function fetchJiraIssues(jql) {
-    const url = `https://${JIRA_DOMAIN}/rest/api/3/search/jql`; // エンドポイントを新しいものに変更
+    const url = `https://${JIRA_DOMAIN}/rest/api/3/search/jql`;
     const encodedToken = Utilities.base64Encode(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`);
-
     const headers = {
         'Authorization': `Basic ${encodedToken}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
     };
 
-    // プロジェクトキーが設定されている場合はJQLに追加
     let finalJql = jql;
     if (JIRA_PROJECT_KEY) {
         finalJql = `project = "${JIRA_PROJECT_KEY}" AND ${jql}`;
@@ -33,6 +42,7 @@ function fetchJiraIssues(jql) {
         maxResults: 100
     };
 
+    // 💡 GAS専用の型（GoogleAppsScript.URL_Fetch...）を使用して安全性を高めています
     const options = {
         method: 'post',
         headers: headers,
@@ -48,11 +58,13 @@ function fetchJiraIssues(jql) {
         if (responseCode === 200) {
             const json = JSON.parse(responseBody);
             return json.issues || [];
-        } else {
+        }
+        else {
             console.error(`Jira APIエラー: ${responseCode} - ${responseBody}`);
             return [];
         }
-    } catch (e) {
+    }
+    catch (e) {
         console.error(`フェッチエラー: ${e}`);
         return [];
     }
@@ -60,9 +72,6 @@ function fetchJiraIssues(jql) {
 
 /**
  * 課題リストからDiscordメッセージを生成する
- * @param {Array} issues - 課題の配列
- * @param {string} title - メッセージのタイトル
- * @returns {object|null} - Discordメッセージオブジェクト
  */
 function createDiscordMessage(issues, title) {
     if (issues.length === 0) {
@@ -82,7 +91,7 @@ function createDiscordMessage(issues, title) {
         username: 'Jira期限通知Bot',
         embeds: [{
             title: title,
-            color: 15158332, // 赤色
+            color: 15158332,
             fields: fields,
             timestamp: new Date().toISOString()
         }]
@@ -91,10 +100,10 @@ function createDiscordMessage(issues, title) {
 
 /**
  * Discordにメッセージを送信する
- * @param {object} payload - 送信するメッセージオブジェクト
  */
 function sendToDiscord(payload) {
-    if (!payload) return;
+    if (!payload)
+        return;
 
     const options = {
         method: 'post',
@@ -104,7 +113,8 @@ function sendToDiscord(payload) {
 
     try {
         UrlFetchApp.fetch(DISCORD_WEBHOOK_URL, options);
-    } catch (e) {
+    }
+    catch (e) {
         console.error(`Discordへの送信エラー: ${e}`);
     }
 }
@@ -116,25 +126,24 @@ function notifyTasksFor830() {
     const messages = [];
 
     // 1. 期限切れのタスク
-    const expiredIssues = fetchJiraIssues(`due < now()`);
-    if (expiredIssues.length > 0) {
+    const expiredIssues = fetchJiraIssues(`duedate < startOfDay()`);
+    if (expiredIssues.length > 0)
         messages.push(createDiscordMessage(expiredIssues, '🚨【期限切れ】のタスク'));
-    }
 
     // 2. 当日が期限のタスク
-    const todayIssues = fetchJiraIssues(`due = now()`);
-    if (todayIssues.length > 0) {
+    const todayIssues = fetchJiraIssues(`duedate >= startOfDay() AND duedate <= endOfDay()`);
+    if (todayIssues.length > 0)
         messages.push(createDiscordMessage(todayIssues, '🔥【本日が期限】のタスク'));
-    }
 
     // 3. 明日が期限のタスク（リマインド用）
-    const tomorrowIssues = fetchJiraIssues(`due = "1d"`);
-    if (tomorrowIssues.length > 0) {
-        messages.push(createDiscordMessage(tomorrowIssues, '⏰【明日が期限】のタスク'));
-    }
+    const yesterdayIssues = fetchJiraIssues(`duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)`);
+    if (yesterdayIssues.length > 0)
+        messages.push(createDiscordMessage(yesterdayIssues, '⏰【昨日が期限】だったタスク'));
 
-    // メッセージを送信
-    messages.forEach(msg => sendToDiscord(msg));
+    messages.forEach(msg => {
+        if (msg)
+            sendToDiscord(msg);
+    });
 }
 
 /**
@@ -144,17 +153,17 @@ function notifyTasksFor930() {
     const messages = [];
 
     // 1. 3日後が期限のタスク
-    const threeDaysIssues = fetchJiraIssues(`due = "3d"`);
-    if (threeDaysIssues.length > 0) {
+    const threeDaysIssues = fetchJiraIssues(`duedate >= startOfDay(3) AND duedate <= endOfDay(3)`);
+    if (threeDaysIssues.length > 0)
         messages.push(createDiscordMessage(threeDaysIssues, '🗓️【3日後が期限】のタスク'));
-    }
 
     // 2. 1週間後が期限のタスク
-    const sevenDaysIssues = fetchJiraIssues(`due = "7d"`);
-    if (sevenDaysIssues.length > 0) {
+    const sevenDaysIssues = fetchJiraIssues(`duedate >= startOfDay(7) AND duedate <= endOfDay(7)`);
+    if (sevenDaysIssues.length > 0)
         messages.push(createDiscordMessage(sevenDaysIssues, '🗓️【1週間後が期限】のタスク'));
-    }
 
-    // メッセージを送信
-    messages.forEach(msg => sendToDiscord(msg));
+    messages.forEach(msg => {
+        if (msg)
+            sendToDiscord(msg);
+    });
 }
