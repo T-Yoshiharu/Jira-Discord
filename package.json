@@ -1,6 +1,14 @@
 {
+  "scripts": {
+    "build": "tsc --pretty false",
+    "push": "npm run build && clasp push"
+  },
   "dependencies": {
     "@google/clasp": "^3.0.6-alpha",
     "@types/google-apps-script": "^1.0.99"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
   }
 }
