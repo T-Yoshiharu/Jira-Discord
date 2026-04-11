@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "build": "tsc --pretty false",
+    "build": "tsc --pretty false && prettier --write \"dist/**/*.js\" && node scripts/postprocess-dist.js",
     "push": "npm run build && clasp push"
   },
   "dependencies": {
@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "prettier": "^3.8.2",
     "typescript": "^5.9.3"
   }
 }
