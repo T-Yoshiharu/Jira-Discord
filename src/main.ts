@@ -13,6 +13,18 @@ interface JiraIssue {
     };
 }
 
+interface JiraProjectConfig {
+    projectKey: string;
+    discordWebhookUrl: string;
+}
+
+interface SystemSettings {
+    jiraDomain: string;
+    jiraEmail: string;
+    jiraApiToken: string;
+    jiraProjects: JiraProjectConfig[];
+}
+
 interface DiscordEmbedField {
     name: string;
     value: string;
@@ -33,12 +45,82 @@ interface DiscordPayload {
 // ==========================================
 
 const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
-// 💡 as string をつけることで、「これは確実に文字列です」とTypeScriptに教えています
-const JIRA_DOMAIN = SCRIPT_PROPERTIES.getProperty('JIRA_DOMAIN') as string;
-const JIRA_EMAIL = SCRIPT_PROPERTIES.getProperty('JIRA_EMAIL') as string;
-const JIRA_API_TOKEN = SCRIPT_PROPERTIES.getProperty('JIRA_API_TOKEN') as string;
-const DISCORD_WEBHOOK_URL = SCRIPT_PROPERTIES.getProperty('DISCORD_WEBHOOK_URL') as string;
-const JIRA_PROJECT_KEY = SCRIPT_PROPERTIES.getProperty('JIRA_PROJECT_KEY') as string;
+const PROP_JIRA_DOMAIN = 'JIRA_DOMAIN';
+const PROP_JIRA_EMAIL = 'JIRA_EMAIL';
+const PROP_JIRA_API_TOKEN = 'JIRA_API_TOKEN';
+const PROP_DISCORD_WEBHOOK_URL = 'DISCORD_WEBHOOK_URL';
+const PROP_JIRA_PROJECT_KEY = 'JIRA_PROJECT_KEY';
+const PROP_JIRA_PROJECTS_JSON = 'JIRA_PROJECTS_JSON';
+
+function getStringProperty(key: string): string {
+    return SCRIPT_PROPERTIES.getProperty(key) || '';
+}
+
+function normalizeProjectConfig(project: JiraProjectConfig): JiraProjectConfig {
+    return {
+        projectKey: project.projectKey.trim(),
+        discordWebhookUrl: project.discordWebhookUrl.trim()
+    };
+}
+
+function getJiraProjects(): JiraProjectConfig[] {
+    const projectsJson = getStringProperty(PROP_JIRA_PROJECTS_JSON);
+
+    if (projectsJson) {
+        try {
+            const parsed = JSON.parse(projectsJson) as JiraProjectConfig[];
+            const normalized = parsed
+                .filter(p => p && typeof p.projectKey === 'string' && typeof p.discordWebhookUrl === 'string')
+                .map(normalizeProjectConfig)
+                .filter(p => p.projectKey !== '' && p.discordWebhookUrl !== '');
+
+            if (normalized.length > 0) {
+                return normalized;
+            }
+        } catch (e) {
+            console.error(`JIRA_PROJECTS_JSON の解析エラー: ${e}`);
+        }
+    }
+
+    // 既存の単一プロジェクト設定との互換性を維持
+    const singleProjectKey = getStringProperty(PROP_JIRA_PROJECT_KEY).trim();
+    const singleWebhookUrl = getStringProperty(PROP_DISCORD_WEBHOOK_URL).trim();
+
+    if (singleProjectKey && singleWebhookUrl) {
+        return [{
+            projectKey: singleProjectKey,
+            discordWebhookUrl: singleWebhookUrl
+        }];
+    }
+
+    return [];
+}
+
+function getSystemSettings(): SystemSettings {
+    return {
+        jiraDomain: getStringProperty(PROP_JIRA_DOMAIN).trim(),
+        jiraEmail: getStringProperty(PROP_JIRA_EMAIL).trim(),
+        jiraApiToken: getStringProperty(PROP_JIRA_API_TOKEN).trim(),
+        jiraProjects: getJiraProjects()
+    };
+}
+
+function saveSystemSettings(settings: SystemSettings): void {
+    const normalizedProjects = settings.jiraProjects
+        .map(normalizeProjectConfig)
+        .filter(project => project.projectKey !== '' && project.discordWebhookUrl !== '');
+
+    SCRIPT_PROPERTIES.setProperties({
+        [PROP_JIRA_DOMAIN]: settings.jiraDomain.trim(),
+        [PROP_JIRA_EMAIL]: settings.jiraEmail.trim(),
+        [PROP_JIRA_API_TOKEN]: settings.jiraApiToken.trim(),
+        [PROP_JIRA_PROJECTS_JSON]: JSON.stringify(normalizedProjects)
+    });
+
+    // 新方式へ移行したら旧キーはクリア
+    SCRIPT_PROPERTIES.deleteProperty(PROP_JIRA_PROJECT_KEY);
+    SCRIPT_PROPERTIES.deleteProperty(PROP_DISCORD_WEBHOOK_URL);
+}
 
 // ==========================================
 // 3. メインの処理関数
@@ -49,9 +131,9 @@ const JIRA_PROJECT_KEY = SCRIPT_PROPERTIES.getProperty('JIRA_PROJECT_KEY') as st
  * @param jql - Jira Query Language (JQL)
  * @returns 取得した課題の配列（JiraIssueの配列）
  */
-function fetchJiraIssues(jql: string): JiraIssue[] {
-    const url: string = `https://${JIRA_DOMAIN}/rest/api/3/search/jql`;
-    const encodedToken = Utilities.base64Encode(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`);
+function fetchJiraIssues(jql: string, projectKey: string, settings: SystemSettings): JiraIssue[] {
+    const url: string = `https://${settings.jiraDomain}/rest/api/3/search/jql`;
+    const encodedToken = Utilities.base64Encode(`${settings.jiraEmail}:${settings.jiraApiToken}`);
 
     const headers = {
         'Authorization': `Basic ${encodedToken}`,
@@ -59,10 +141,7 @@ function fetchJiraIssues(jql: string): JiraIssue[] {
         'Accept': 'application/json'
     };
 
-    let finalJql = jql;
-    if (JIRA_PROJECT_KEY) {
-        finalJql = `project = "${JIRA_PROJECT_KEY}" AND ${jql}`;
-    }
+    const finalJql = `project = "${projectKey}" AND ${jql}`;
 
     const payload = {
         jql: `${finalJql} AND statusCategory != "Done" ORDER BY duedate ASC`,
@@ -105,7 +184,8 @@ function createDiscordMessage(issues: JiraIssue[], title: string): DiscordPayloa
     }
 
     const fields: DiscordEmbedField[] = issues.map(issue => {
-        const issueUrl = `https://${JIRA_DOMAIN}/browse/${issue.key}`;
+        const jiraDomain = getStringProperty(PROP_JIRA_DOMAIN);
+        const issueUrl = `https://${jiraDomain}/browse/${issue.key}`;
         const dueDate = issue.fields.duedate || '期限なし';
         return {
             name: `${issue.key}: ${issue.fields.summary}`,
@@ -127,7 +207,7 @@ function createDiscordMessage(issues: JiraIssue[], title: string): DiscordPayloa
 /**
  * Discordにメッセージを送信する
  */
-function sendToDiscord(payload: DiscordPayload | null): void {
+function sendToDiscord(payload: DiscordPayload | null, webhookUrl: string): void {
     if (!payload) return;
 
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
@@ -137,32 +217,51 @@ function sendToDiscord(payload: DiscordPayload | null): void {
     };
 
     try {
-        UrlFetchApp.fetch(DISCORD_WEBHOOK_URL, options);
+        UrlFetchApp.fetch(webhookUrl, options);
     } catch (e) {
         console.error(`Discordへの送信エラー: ${e}`);
     }
+}
+
+function runNotificationForProject(
+    settings: SystemSettings,
+    project: JiraProjectConfig,
+    schedules: { jql: string; title: string }[]
+): void {
+    schedules.forEach(schedule => {
+        const issues = fetchJiraIssues(schedule.jql, project.projectKey, settings);
+        const title = `[${project.projectKey}] ${schedule.title}`;
+        const message = createDiscordMessage(issues, title);
+        if (message) {
+            sendToDiscord(message, project.discordWebhookUrl);
+        }
+    });
 }
 
 /**
  * 8:30の通知を実行する関数
  */
 function notifyTasksFor830(): void {
-    const messages: (DiscordPayload | null)[] = [];
+    const settings = getSystemSettings();
 
-    // 1. 期限切れのタスク
-    const expiredIssues = fetchJiraIssues(`duedate < startOfDay()`);
-    if (expiredIssues.length > 0) messages.push(createDiscordMessage(expiredIssues, '🚨【期限切れ】のタスク'));
+    if (!settings.jiraDomain || !settings.jiraEmail || !settings.jiraApiToken) {
+        console.error('Jira認証情報が未設定です。JIRA_DOMAIN/JIRA_EMAIL/JIRA_API_TOKEN を設定してください。');
+        return;
+    }
 
-    // 2. 当日が期限のタスク
-    const todayIssues = fetchJiraIssues(`duedate >= startOfDay() AND duedate <= endOfDay()`);
-    if (todayIssues.length > 0) messages.push(createDiscordMessage(todayIssues, '🔥【本日が期限】のタスク'));
+    if (settings.jiraProjects.length === 0) {
+        console.error('通知対象プロジェクトが未設定です。JIRA_PROJECTS_JSON または WebUI で設定してください。');
+        return;
+    }
 
-    // 3. 明日が期限のタスク（リマインド用）
-    const yesterdayIssues = fetchJiraIssues(`duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)`);
-    if (yesterdayIssues.length > 0) messages.push(createDiscordMessage(yesterdayIssues, '⏰【昨日が期限】だったタスク'));
+    const schedules = [
+        { jql: 'duedate < startOfDay()', title: '🚨【期限切れ】のタスク' },
+        { jql: 'duedate >= startOfDay() AND duedate <= endOfDay()', title: '🔥【本日が期限】のタスク' },
+        { jql: 'duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)', title: '⏰【昨日が期限】だったタスク' }
+    ];
 
-    messages.forEach(msg => {
-        if (msg) sendToDiscord(msg);
+    settings.jiraProjects.forEach(project => {
+        runNotificationForProject(settings, project, schedules);
     });
 }
 
@@ -170,17 +269,24 @@ function notifyTasksFor830(): void {
  * 9:30の通知を実行する関数
  */
 function notifyTasksFor930(): void {
-    const messages: (DiscordPayload | null)[] = [];
+        const settings = getSystemSettings();
 
-    // 1. 3日後が期限のタスク
-    const threeDaysIssues = fetchJiraIssues(`duedate >= startOfDay(3) AND duedate <= endOfDay(3)`);
-    if (threeDaysIssues.length > 0) messages.push(createDiscordMessage(threeDaysIssues, '🗓️【3日後が期限】のタスク'));
+        if (!settings.jiraDomain || !settings.jiraEmail || !settings.jiraApiToken) {
+                console.error('Jira認証情報が未設定です。JIRA_DOMAIN/JIRA_EMAIL/JIRA_API_TOKEN を設定してください。');
+                return;
+        }
 
-    // 2. 1週間後が期限のタスク
-    const sevenDaysIssues = fetchJiraIssues(`duedate >= startOfDay(7) AND duedate <= endOfDay(7)`);
-    if (sevenDaysIssues.length > 0) messages.push(createDiscordMessage(sevenDaysIssues, '🗓️【1週間後が期限】のタスク'));
+        if (settings.jiraProjects.length === 0) {
+                console.error('通知対象プロジェクトが未設定です。JIRA_PROJECTS_JSON または WebUI で設定してください。');
+                return;
+        }
 
-    messages.forEach(msg => {
-        if (msg) sendToDiscord(msg);
+        const schedules = [
+                { jql: 'duedate >= startOfDay(3) AND duedate <= endOfDay(3)', title: '🗓️【3日後が期限】のタスク' },
+                { jql: 'duedate >= startOfDay(7) AND duedate <= endOfDay(7)', title: '🗓️【1週間後が期限】のタスク' }
+        ];
+
+        settings.jiraProjects.forEach(project => {
+                runNotificationForProject(settings, project, schedules);
     });
 }
