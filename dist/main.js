@@ -160,16 +160,23 @@ function createDiscordMessage(issues, title) {
  * Discordにメッセージを送信する
  */
 function sendToDiscord(payload, webhookUrl) {
-    if (!payload) return;
+    if (!payload) return false;
     const options = {
         method: 'post',
         contentType: 'application/json',
         payload: JSON.stringify(payload)
     };
     try {
-        UrlFetchApp.fetch(webhookUrl, options);
+        const response = UrlFetchApp.fetch(webhookUrl, options);
+        const code = response.getResponseCode();
+        if (code >= 200 && code < 300) {
+            return true;
+        }
+        console.error(`Discordへの送信エラー: HTTP ${code} - ${response.getContentText()}`);
+        return false;
     } catch (e) {
         console.error(`Discordへの送信エラー: ${e}`);
+        return false;
     }
 }
 
@@ -262,6 +269,102 @@ function getSettingsForUi() {
 }
 
 function saveSettingsFromUi(input) {
+    const validation = validateSettingsForUi(input);
+    if (!validation.ok) {
+        return validation;
+    }
+    const normalizedProjects = input.jiraProjects.map(normalizeProjectConfig);
+    saveSystemSettings({
+        jiraDomain: input.jiraDomain,
+        jiraEmail: input.jiraEmail,
+        jiraApiToken: input.jiraApiToken,
+        jiraProjects: normalizedProjects
+    });
+    return {
+        ok: true,
+        message: '設定を保存しました。'
+    };
+}
+
+function testConnectionsFromUi(input) {
+    const validation = validateSettingsForUi(input);
+    if (!validation.ok) {
+        return validation;
+    }
+    const normalizedProjects = input.jiraProjects.map(normalizeProjectConfig);
+    const jiraCheck = checkJiraConnection({
+        jiraDomain: input.jiraDomain.trim(),
+        jiraEmail: input.jiraEmail.trim(),
+        jiraApiToken: input.jiraApiToken.trim(),
+        jiraProjects: normalizedProjects
+    });
+    if (!jiraCheck.ok) {
+        return jiraCheck;
+    }
+    const invalidWebhookProjects = normalizedProjects
+        .filter((project) => !isLikelyDiscordWebhookUrl(project.discordWebhookUrl))
+        .map((project) => project.projectKey);
+    if (invalidWebhookProjects.length > 0) {
+        return {
+            ok: false,
+            message: `Jira接続は成功しましたが、Webhook URL形式が不正なプロジェクトがあります: ${invalidWebhookProjects.join(', ')}`
+        };
+    }
+    return {
+        ok: true,
+        message: '接続テスト成功: Jira認証OK / Discord Webhook URL形式OK'
+    };
+}
+
+function sendTestNotificationFromUi(input) {
+    const validation = validateSettingsForUi(input);
+    if (!validation.ok) {
+        return validation;
+    }
+    const normalizedProjects = input.jiraProjects.map(normalizeProjectConfig);
+    const failedProjects = [];
+    let successCount = 0;
+    normalizedProjects.forEach((project) => {
+        if (!isLikelyDiscordWebhookUrl(project.discordWebhookUrl)) {
+            failedProjects.push(`${project.projectKey}(Webhook形式不正)`);
+            return;
+        }
+        const payload = {
+            username: 'Jira期限通知Bot',
+            embeds: [
+                {
+                    title: `[${project.projectKey}] 🧪 テスト通知`,
+                    color: 3447003,
+                    fields: [
+                        {
+                            name: '通知テスト',
+                            value: 'WebUIからテスト通知が送信されました。'
+                        }
+                    ],
+                    timestamp: new Date().toISOString()
+                }
+            ]
+        };
+        const sent = sendToDiscord(payload, project.discordWebhookUrl);
+        if (sent) {
+            successCount += 1;
+        } else {
+            failedProjects.push(project.projectKey);
+        }
+    });
+    if (failedProjects.length > 0) {
+        return {
+            ok: false,
+            message: `通知テスト: ${successCount}件成功 / ${failedProjects.length}件失敗 (${failedProjects.join(', ')})`
+        };
+    }
+    return {
+        ok: true,
+        message: `通知テスト成功: ${successCount}件のWebhookへ送信しました。`
+    };
+}
+
+function validateSettingsForUi(input) {
     if (!input.jiraDomain || !input.jiraEmail || !input.jiraApiToken) {
         return {
             ok: false,
@@ -277,16 +380,48 @@ function saveSettingsFromUi(input) {
             message: '少なくとも1つの Jira プロジェクト設定が必要です。'
         };
     }
-    saveSystemSettings({
-        jiraDomain: input.jiraDomain,
-        jiraEmail: input.jiraEmail,
-        jiraApiToken: input.jiraApiToken,
-        jiraProjects: normalizedProjects
-    });
+    // 呼び出し元がそのまま使えるように、元の入力へ反映
+    input.jiraProjects = normalizedProjects;
     return {
         ok: true,
-        message: '設定を保存しました。'
+        message: 'ok'
     };
+}
+
+function isLikelyDiscordWebhookUrl(url) {
+    return /^https:\/\/discord\.com\/api\/webhooks\//.test(url.trim());
+}
+
+function checkJiraConnection(settings) {
+    const url = `https://${settings.jiraDomain}/rest/api/3/myself`;
+    const encodedToken = Utilities.base64Encode(`${settings.jiraEmail}:${settings.jiraApiToken}`);
+    const options = {
+        method: 'get',
+        headers: {
+            Authorization: `Basic ${encodedToken}`,
+            Accept: 'application/json'
+        },
+        muteHttpExceptions: true
+    };
+    try {
+        const response = UrlFetchApp.fetch(url, options);
+        const code = response.getResponseCode();
+        if (code >= 200 && code < 300) {
+            return {
+                ok: true,
+                message: 'Jira接続OK'
+            };
+        }
+        return {
+            ok: false,
+            message: `Jira接続に失敗しました。HTTP ${code}: ${response.getContentText()}`
+        };
+    } catch (e) {
+        return {
+            ok: false,
+            message: `Jira接続に失敗しました: ${e}`
+        };
+    }
 }
 
 function getSettingsPageHtml() {
@@ -472,6 +607,8 @@ function getSettingsPageHtml() {
         </div>
 
         <div class="footer">
+            <button class="btn-secondary" type="button" onclick="testConnections()">接続テスト</button>
+            <button class="btn-secondary" type="button" onclick="sendTestNotification()">通知テスト送信</button>
             <button class="btn-primary" type="button" onclick="saveSettings()">設定を保存</button>
             <span class="status" id="status">読み込み中...</span>
         </div>
@@ -519,12 +656,7 @@ function getSettingsPageHtml() {
         }
 
         function saveSettings() {
-            const payload = {
-                jiraDomain: document.getElementById('jiraDomain').value.trim(),
-                jiraEmail: document.getElementById('jiraEmail').value.trim(),
-                jiraApiToken: document.getElementById('jiraApiToken').value.trim(),
-                jiraProjects: collectProjects()
-            };
+            const payload = getCurrentFormSettings();
 
             setStatus('保存中...');
             google.script.run
@@ -535,6 +667,43 @@ function getSettingsPageHtml() {
                     setStatus('保存失敗: ' + error.message);
                 })
                 .saveSettingsFromUi(payload);
+        }
+
+        function testConnections() {
+            const payload = getCurrentFormSettings();
+
+            setStatus('接続テスト中...');
+            google.script.run
+                .withSuccessHandler(function (result) {
+                    setStatus(result.message);
+                })
+                .withFailureHandler(function (error) {
+                    setStatus('接続テスト失敗: ' + error.message);
+                })
+                .testConnectionsFromUi(payload);
+        }
+
+        function sendTestNotification() {
+            const payload = getCurrentFormSettings();
+
+            setStatus('通知テスト送信中...');
+            google.script.run
+                .withSuccessHandler(function (result) {
+                    setStatus(result.message);
+                })
+                .withFailureHandler(function (error) {
+                    setStatus('通知テスト失敗: ' + error.message);
+                })
+                .sendTestNotificationFromUi(payload);
+        }
+
+        function getCurrentFormSettings() {
+            return {
+                jiraDomain: document.getElementById('jiraDomain').value.trim(),
+                jiraEmail: document.getElementById('jiraEmail').value.trim(),
+                jiraApiToken: document.getElementById('jiraApiToken').value.trim(),
+                jiraProjects: collectProjects()
+            };
         }
 
         function loadSettings() {
