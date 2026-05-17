@@ -1,27 +1,21 @@
 'use strict';
-// TypeScriptで作成
-// ==========================================
-// 2. 設定の読み込み
-// ==========================================
-const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
-const PROP_JIRA_DOMAIN = 'JIRA_DOMAIN';
-const PROP_JIRA_EMAIL = 'JIRA_EMAIL';
-const PROP_JIRA_API_TOKEN = 'JIRA_API_TOKEN';
-const PROP_DISCORD_WEBHOOK_URL = 'DISCORD_WEBHOOK_URL';
-const PROP_JIRA_PROJECT_KEY = 'JIRA_PROJECT_KEY';
-const PROP_JIRA_PROJECTS_JSON = 'JIRA_PROJECTS_JSON';
-
+// src/backend/core/properties.ts
+var SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
+var PROP_JIRA_DOMAIN = 'JIRA_DOMAIN';
+var PROP_JIRA_EMAIL = 'JIRA_EMAIL';
+var PROP_JIRA_API_TOKEN = 'JIRA_API_TOKEN';
+var PROP_DISCORD_WEBHOOK_URL = 'DISCORD_WEBHOOK_URL';
+var PROP_JIRA_PROJECT_KEY = 'JIRA_PROJECT_KEY';
+var PROP_JIRA_PROJECTS_JSON = 'JIRA_PROJECTS_JSON';
 function getStringProperty(key) {
     return SCRIPT_PROPERTIES.getProperty(key) || '';
 }
-
 function normalizeProjectConfig(project) {
     return {
         projectKey: project.projectKey.trim(),
         discordWebhookUrl: project.discordWebhookUrl.trim()
     };
 }
-
 function getJiraProjects() {
     const projectsJson = getStringProperty(PROP_JIRA_PROJECTS_JSON);
     if (projectsJson) {
@@ -40,10 +34,9 @@ function getJiraProjects() {
                 return normalized;
             }
         } catch (e) {
-            console.error(`JIRA_PROJECTS_JSON の解析エラー: ${e}`);
+            console.error(`JIRA_PROJECTS_JSON \u306E\u89E3\u6790\u30A8\u30E9\u30FC: ${e}`);
         }
     }
-    // 既存の単一プロジェクト設定との互換性を維持
     const singleProjectKey = getStringProperty(PROP_JIRA_PROJECT_KEY).trim();
     const singleWebhookUrl = getStringProperty(PROP_DISCORD_WEBHOOK_URL).trim();
     if (singleProjectKey && singleWebhookUrl) {
@@ -56,7 +49,6 @@ function getJiraProjects() {
     }
     return [];
 }
-
 function getSystemSettings() {
     return {
         jiraDomain: getStringProperty(PROP_JIRA_DOMAIN).trim(),
@@ -65,7 +57,6 @@ function getSystemSettings() {
         jiraProjects: getJiraProjects()
     };
 }
-
 function saveSystemSettings(settings) {
     const normalizedProjects = settings.jiraProjects
         .map(normalizeProjectConfig)
@@ -76,91 +67,84 @@ function saveSystemSettings(settings) {
         [PROP_JIRA_API_TOKEN]: settings.jiraApiToken.trim(),
         [PROP_JIRA_PROJECTS_JSON]: JSON.stringify(normalizedProjects)
     });
-    // 新方式へ移行したら旧キーはクリア
-    SCRIPT_PROPERTIES.deleteProperty(PROP_JIRA_PROJECT_KEY);
-    SCRIPT_PROPERTIES.deleteProperty(PROP_DISCORD_WEBHOOK_URL);
 }
 
-// ==========================================
-// 3. メインの処理関数
-// ==========================================
-/**
- * Jira APIにリクエストを送信する共通関数
- * @param jql - Jira Query Language (JQL)
- * @returns 取得した課題の配列（JiraIssueの配列）
- */
-function fetchJiraIssues(jql, projectKey, settings) {
-    const url = `https://${settings.jiraDomain}/rest/api/3/search/jql`;
-    const encodedToken = Utilities.base64Encode(`${settings.jiraEmail}:${settings.jiraApiToken}`);
-    const headers = {
-        Authorization: `Basic ${encodedToken}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
-    };
-    const finalJql = `project = "${projectKey}" AND ${jql}`;
-    const payload = {
-        jql: `${finalJql} AND statusCategory != "Done" ORDER BY duedate ASC`,
-        fields: ['summary', 'duedate'],
-        maxResults: 100
-    };
-    // 💡 GAS専用の型（GoogleAppsScript.URL_Fetch...）を使用して安全性を高めています
-    const options = {
-        method: 'post',
-        headers: headers,
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-    };
-    try {
-        const response = UrlFetchApp.fetch(url, options);
-        const responseCode = response.getResponseCode();
-        const responseBody = response.getContentText();
-        if (responseCode === 200) {
-            const json = JSON.parse(responseBody);
-            return json.issues || [];
-        } else {
-            console.error(`Jira APIエラー: ${responseCode} - ${responseBody}`);
-            return [];
-        }
-    } catch (e) {
-        console.error(`フェッチエラー: ${e}`);
-        return [];
+// src/backend/core/validators.ts
+function validateSettingsForUi(input) {
+    if (!input.jiraDomain || !input.jiraEmail || !input.jiraApiToken) {
+        return {
+            ok: false,
+            message:
+                'Jira\u63A5\u7D9A\u60C5\u5831\uFF08Domain / Email / API Token\uFF09\u306F\u5FC5\u9808\u3067\u3059\u3002'
+        };
     }
+    const normalizedProjects = input.jiraProjects
+        .map(normalizeProjectConfig)
+        .filter((project) => project.projectKey !== '' && project.discordWebhookUrl !== '');
+    if (normalizedProjects.length === 0) {
+        return {
+            ok: false,
+            message:
+                '\u5C11\u306A\u304F\u3068\u30821\u3064\u306E Jira \u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u8A2D\u5B9A\u304C\u5FC5\u8981\u3067\u3059\u3002'
+        };
+    }
+    input.jiraProjects = normalizedProjects;
+    return {
+        ok: true,
+        message: 'ok'
+    };
+}
+function isLikelyDiscordWebhookUrl(url) {
+    return /^https:\/\/discord\.com\/api\/webhooks\//.test(url.trim());
 }
 
-/**
- * 課題リストからDiscordメッセージを生成する
- */
-function createDiscordMessage(issues, title) {
+// src/backend/services/Discord.ts
+function createDiscordMessage(issues, title, jiraDomain) {
     if (issues.length === 0) {
         return null;
     }
     const fields = issues.map((issue) => {
-        const jiraDomain = getStringProperty(PROP_JIRA_DOMAIN);
         const issueUrl = `https://${jiraDomain}/browse/${issue.key}`;
-        const dueDate = issue.fields.duedate || '期限なし';
+        const dueDate = issue.fields.duedate || '\u671F\u9650\u306A\u3057';
         return {
             name: `${issue.key}: ${issue.fields.summary}`,
-            value: `[タスクを開く](${issueUrl}) - **期限: ${dueDate}**`
+            value: `[\u30BF\u30B9\u30AF\u3092\u958B\u304F](${issueUrl}) - **\u671F\u9650: ${dueDate}**`
         };
     });
     return {
-        username: 'Jira期限通知Bot',
+        username: 'Jira\u671F\u9650\u901A\u77E5Bot',
         embeds: [
             {
-                title: title,
+                title,
                 color: 15158332,
-                fields: fields,
-                timestamp: new Date().toISOString()
+                fields,
+                timestamp: /* @__PURE__ */ new Date().toISOString()
             }
         ]
     };
 }
-
-/**
- * Discordにメッセージを送信する
- */
+function createTestNotificationPayload(projectKey) {
+    return {
+        username: 'Jira\u671F\u9650\u901A\u77E5Bot',
+        embeds: [
+            {
+                title: `[${projectKey}] \u{1F9EA} \u30C6\u30B9\u30C8\u901A\u77E5`,
+                color: 3447003,
+                fields: [
+                    {
+                        name: '\u901A\u77E5\u30C6\u30B9\u30C8',
+                        value: 'WebUI\u304B\u3089\u30C6\u30B9\u30C8\u901A\u77E5\u304C\u9001\u4FE1\u3055\u308C\u307E\u3057\u305F\u3002'
+                    }
+                ],
+                timestamp: /* @__PURE__ */ new Date().toISOString()
+            }
+        ]
+    };
+}
 function sendToDiscord(payload, webhookUrl) {
-    if (!payload) return false;
+    if (!payload) {
+        return false;
+    }
     const options = {
         method: 'post',
         contentType: 'application/json',
@@ -172,102 +156,92 @@ function sendToDiscord(payload, webhookUrl) {
         if (code >= 200 && code < 300) {
             return true;
         }
-        console.error(`Discordへの送信エラー: HTTP ${code} - ${response.getContentText()}`);
+        console.error(
+            `Discord\u3078\u306E\u9001\u4FE1\u30A8\u30E9\u30FC: HTTP ${code} - ${response.getContentText()}`
+        );
         return false;
     } catch (e) {
-        console.error(`Discordへの送信エラー: ${e}`);
+        console.error(`Discord\u3078\u306E\u9001\u4FE1\u30A8\u30E9\u30FC: ${e}`);
         return false;
     }
 }
 
-function runNotificationForProject(settings, project, schedules) {
-    schedules.forEach((schedule) => {
-        const issues = fetchJiraIssues(schedule.jql, project.projectKey, settings);
-        const title = `[${project.projectKey}] ${schedule.title}`;
-        const message = createDiscordMessage(issues, title);
-        if (message) {
-            sendToDiscord(message, project.discordWebhookUrl);
+// src/backend/services/Jira.ts
+function fetchJiraIssues(jql, projectKey, settings) {
+    const url = `https://${settings.jiraDomain}/rest/api/3/search/jql`;
+    const encodedToken = Utilities.base64Encode(
+        `${settings.jiraEmail}:${settings.jiraApiToken}`
+    );
+    const headers = {
+        Authorization: `Basic ${encodedToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+    };
+    const finalJql = `project = "${projectKey}" AND ${jql}`;
+    const payload = {
+        jql: `${finalJql} AND statusCategory != "Done" ORDER BY duedate ASC`,
+        fields: ['summary', 'duedate'],
+        maxResults: 100
+    };
+    const options = {
+        method: 'post',
+        headers,
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+    };
+    try {
+        const response = UrlFetchApp.fetch(url, options);
+        const responseCode = response.getResponseCode();
+        const responseBody = response.getContentText();
+        if (responseCode === 200) {
+            const json = JSON.parse(responseBody);
+            return json.issues || [];
         }
-    });
+        console.error(`Jira API\u30A8\u30E9\u30FC: ${responseCode} - ${responseBody}`);
+        return [];
+    } catch (e) {
+        console.error(`\u30D5\u30A7\u30C3\u30C1\u30A8\u30E9\u30FC: ${e}`);
+        return [];
+    }
 }
-
-/**
- * 8:30の通知を実行する関数
- */
-function notifyTasksFor830() {
-    const settings = getSystemSettings();
-    if (!settings.jiraDomain || !settings.jiraEmail || !settings.jiraApiToken) {
-        console.error(
-            'Jira認証情報が未設定です。JIRA_DOMAIN/JIRA_EMAIL/JIRA_API_TOKEN を設定してください。'
-        );
-        return;
-    }
-    if (settings.jiraProjects.length === 0) {
-        console.error(
-            '通知対象プロジェクトが未設定です。JIRA_PROJECTS_JSON または WebUI で設定してください。'
-        );
-        return;
-    }
-    const schedules = [
-        { jql: 'duedate < startOfDay()', title: '🚨【期限切れ】のタスク' },
-        {
-            jql: 'duedate >= startOfDay() AND duedate <= endOfDay()',
-            title: '🔥【本日が期限】のタスク'
+function checkJiraConnection(settings) {
+    const url = `https://${settings.jiraDomain}/rest/api/3/myself`;
+    const encodedToken = Utilities.base64Encode(
+        `${settings.jiraEmail}:${settings.jiraApiToken}`
+    );
+    const options = {
+        method: 'get',
+        headers: {
+            Authorization: `Basic ${encodedToken}`,
+            Accept: 'application/json'
         },
-        {
-            jql: 'duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)',
-            title: '⏰【昨日が期限】だったタスク'
+        muteHttpExceptions: true
+    };
+    try {
+        const response = UrlFetchApp.fetch(url, options);
+        const code = response.getResponseCode();
+        if (code >= 200 && code < 300) {
+            return {
+                ok: true,
+                message: 'Jira\u63A5\u7D9AOK'
+            };
         }
-    ];
-    settings.jiraProjects.forEach((project) => {
-        runNotificationForProject(settings, project, schedules);
-    });
-}
-
-/**
- * 9:30の通知を実行する関数
- */
-function notifyTasksFor930() {
-    const settings = getSystemSettings();
-    if (!settings.jiraDomain || !settings.jiraEmail || !settings.jiraApiToken) {
-        console.error(
-            'Jira認証情報が未設定です。JIRA_DOMAIN/JIRA_EMAIL/JIRA_API_TOKEN を設定してください。'
-        );
-        return;
+        return {
+            ok: false,
+            message: `Jira\u63A5\u7D9A\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002HTTP ${code}: ${response.getContentText()}`
+        };
+    } catch (e) {
+        return {
+            ok: false,
+            message: `Jira\u63A5\u7D9A\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e}`
+        };
     }
-    if (settings.jiraProjects.length === 0) {
-        console.error(
-            '通知対象プロジェクトが未設定です。JIRA_PROJECTS_JSON または WebUI で設定してください。'
-        );
-        return;
-    }
-    const schedules = [
-        {
-            jql: 'duedate >= startOfDay(3) AND duedate <= endOfDay(3)',
-            title: '🗓️【3日後が期限】のタスク'
-        },
-        {
-            jql: 'duedate >= startOfDay(7) AND duedate <= endOfDay(7)',
-            title: '🗓️【1週間後が期限】のタスク'
-        }
-    ];
-    settings.jiraProjects.forEach((project) => {
-        runNotificationForProject(settings, project, schedules);
-    });
 }
 
-// ==========================================
-// 4. Web UI
-// ==========================================
-
-function doGet() {
-    return HtmlService.createHtmlOutput(getSettingsPageHtml()).setTitle('Jira Discord 通知設定');
-}
-
+// src/backend/features/settings.ts
 function getSettingsForUi() {
     return getSystemSettings();
 }
-
 function saveSettingsFromUi(input) {
     const validation = validateSettingsForUi(input);
     if (!validation.ok) {
@@ -282,10 +256,9 @@ function saveSettingsFromUi(input) {
     });
     return {
         ok: true,
-        message: '設定を保存しました。'
+        message: '\u8A2D\u5B9A\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002'
     };
 }
-
 function testConnectionsFromUi(input) {
     const validation = validateSettingsForUi(input);
     if (!validation.ok) {
@@ -307,15 +280,15 @@ function testConnectionsFromUi(input) {
     if (invalidWebhookProjects.length > 0) {
         return {
             ok: false,
-            message: `Jira接続は成功しましたが、Webhook URL形式が不正なプロジェクトがあります: ${invalidWebhookProjects.join(', ')}`
+            message: `Jira\u63A5\u7D9A\u306F\u6210\u529F\u3057\u307E\u3057\u305F\u304C\u3001Webhook URL\u5F62\u5F0F\u304C\u4E0D\u6B63\u306A\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u304C\u3042\u308A\u307E\u3059: ${invalidWebhookProjects.join(', ')}`
         };
     }
     return {
         ok: true,
-        message: '接続テスト成功: Jira認証OK / Discord Webhook URL形式OK'
+        message:
+            '\u63A5\u7D9A\u30C6\u30B9\u30C8\u6210\u529F: Jira\u8A8D\u8A3COK / Discord Webhook URL\u5F62\u5F0FOK'
     };
 }
-
 function sendTestNotificationFromUi(input) {
     const validation = validateSettingsForUi(input);
     if (!validation.ok) {
@@ -326,26 +299,13 @@ function sendTestNotificationFromUi(input) {
     let successCount = 0;
     normalizedProjects.forEach((project) => {
         if (!isLikelyDiscordWebhookUrl(project.discordWebhookUrl)) {
-            failedProjects.push(`${project.projectKey}(Webhook形式不正)`);
+            failedProjects.push(`${project.projectKey}(Webhook\u5F62\u5F0F\u4E0D\u6B63)`);
             return;
         }
-        const payload = {
-            username: 'Jira期限通知Bot',
-            embeds: [
-                {
-                    title: `[${project.projectKey}] 🧪 テスト通知`,
-                    color: 3447003,
-                    fields: [
-                        {
-                            name: '通知テスト',
-                            value: 'WebUIからテスト通知が送信されました。'
-                        }
-                    ],
-                    timestamp: new Date().toISOString()
-                }
-            ]
-        };
-        const sent = sendToDiscord(payload, project.discordWebhookUrl);
+        const sent = sendToDiscord(
+            createTestNotificationPayload(project.projectKey),
+            project.discordWebhookUrl
+        );
         if (sent) {
             successCount += 1;
         } else {
@@ -355,380 +315,404 @@ function sendTestNotificationFromUi(input) {
     if (failedProjects.length > 0) {
         return {
             ok: false,
-            message: `通知テスト: ${successCount}件成功 / ${failedProjects.length}件失敗 (${failedProjects.join(', ')})`
+            message: `\u901A\u77E5\u30C6\u30B9\u30C8: ${successCount}\u4EF6\u6210\u529F / ${failedProjects.length}\u4EF6\u5931\u6557 (${failedProjects.join(', ')})`
         };
     }
     return {
         ok: true,
-        message: `通知テスト成功: ${successCount}件のWebhookへ送信しました。`
+        message: `\u901A\u77E5\u30C6\u30B9\u30C8\u6210\u529F: ${successCount}\u4EF6\u306EWebhook\u3078\u9001\u4FE1\u3057\u307E\u3057\u305F\u3002`
     };
 }
 
-function validateSettingsForUi(input) {
-    if (!input.jiraDomain || !input.jiraEmail || !input.jiraApiToken) {
-        return {
-            ok: false,
-            message: 'Jira接続情報（Domain / Email / API Token）は必須です。'
-        };
-    }
-    const normalizedProjects = input.jiraProjects
-        .map(normalizeProjectConfig)
-        .filter((project) => project.projectKey !== '' && project.discordWebhookUrl !== '');
-    if (normalizedProjects.length === 0) {
-        return {
-            ok: false,
-            message: '少なくとも1つの Jira プロジェクト設定が必要です。'
-        };
-    }
-    // 呼び出し元がそのまま使えるように、元の入力へ反映
-    input.jiraProjects = normalizedProjects;
-    return {
-        ok: true,
-        message: 'ok'
-    };
-}
-
-function isLikelyDiscordWebhookUrl(url) {
-    return /^https:\/\/discord\.com\/api\/webhooks\//.test(url.trim());
-}
-
-function checkJiraConnection(settings) {
-    const url = `https://${settings.jiraDomain}/rest/api/3/myself`;
-    const encodedToken = Utilities.base64Encode(`${settings.jiraEmail}:${settings.jiraApiToken}`);
-    const options = {
-        method: 'get',
-        headers: {
-            Authorization: `Basic ${encodedToken}`,
-            Accept: 'application/json'
-        },
-        muteHttpExceptions: true
-    };
-    try {
-        const response = UrlFetchApp.fetch(url, options);
-        const code = response.getResponseCode();
-        if (code >= 200 && code < 300) {
-            return {
-                ok: true,
-                message: 'Jira接続OK'
-            };
+// src/backend/features/notifications.ts
+function runNotificationForProject(settings, project, schedules) {
+    schedules.forEach((schedule) => {
+        const issues = fetchJiraIssues(schedule.jql, project.projectKey, settings);
+        const title = `[${project.projectKey}] ${schedule.title}`;
+        const message = createDiscordMessage(issues, title, settings.jiraDomain);
+        if (message) {
+            sendToDiscord(message, project.discordWebhookUrl);
         }
-        return {
-            ok: false,
-            message: `Jira接続に失敗しました。HTTP ${code}: ${response.getContentText()}`
-        };
-    } catch (e) {
-        return {
-            ok: false,
-            message: `Jira接続に失敗しました: ${e}`
-        };
+    });
+}
+function hasValidNotificationSettings(settings) {
+    if (!settings.jiraDomain || !settings.jiraEmail || !settings.jiraApiToken) {
+        console.error(
+            'Jira\u8A8D\u8A3C\u60C5\u5831\u304C\u672A\u8A2D\u5B9A\u3067\u3059\u3002JIRA_DOMAIN/JIRA_EMAIL/JIRA_API_TOKEN \u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002'
+        );
+        return false;
     }
+    if (settings.jiraProjects.length === 0) {
+        console.error(
+            '\u901A\u77E5\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u304C\u672A\u8A2D\u5B9A\u3067\u3059\u3002JIRA_PROJECTS_JSON \u307E\u305F\u306F WebUI \u3067\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002'
+        );
+        return false;
+    }
+    return true;
+}
+function notifyTasksFor830() {
+    const settings = getSystemSettings();
+    if (!hasValidNotificationSettings(settings)) {
+        return;
+    }
+    const schedules = [
+        {
+            jql: 'duedate < startOfDay()',
+            title: '\u{1F6A8}\u3010\u671F\u9650\u5207\u308C\u3011\u306E\u30BF\u30B9\u30AF'
+        },
+        {
+            jql: 'duedate >= startOfDay() AND duedate <= endOfDay()',
+            title: '\u{1F525}\u3010\u672C\u65E5\u304C\u671F\u9650\u3011\u306E\u30BF\u30B9\u30AF'
+        },
+        {
+            jql: 'duedate >= startOfDay(-1) AND duedate <= endOfDay(-1)',
+            title: '\u23F0\u3010\u6628\u65E5\u304C\u671F\u9650\u3011\u3060\u3063\u305F\u30BF\u30B9\u30AF'
+        }
+    ];
+    settings.jiraProjects.forEach((project) => {
+        runNotificationForProject(settings, project, schedules);
+    });
+}
+function notifyTasksFor930() {
+    const settings = getSystemSettings();
+    if (!hasValidNotificationSettings(settings)) {
+        return;
+    }
+    const schedules = [
+        {
+            jql: 'duedate >= startOfDay(3) AND duedate <= endOfDay(3)',
+            title: '\u{1F5D3}\uFE0F\u30103\u65E5\u5F8C\u304C\u671F\u9650\u3011\u306E\u30BF\u30B9\u30AF'
+        },
+        {
+            jql: 'duedate >= startOfDay(7) AND duedate <= endOfDay(7)',
+            title: '\u{1F5D3}\uFE0F\u30101\u9031\u9593\u5F8C\u304C\u671F\u9650\u3011\u306E\u30BF\u30B9\u30AF'
+        }
+    ];
+    settings.jiraProjects.forEach((project) => {
+        runNotificationForProject(settings, project, schedules);
+    });
 }
 
+// src/frontend/webUI.ts
 function getSettingsPageHtml() {
     return `<!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Jira Discord 通知設定</title>
-    <style>
-        :root {
-            --bg: #f5f7fb;
-            --card: #ffffff;
-            --text: #1c2230;
-            --muted: #5e6a80;
-            --line: #d9e0ec;
-            --brand: #0f6fff;
-            --brand-hover: #0d5fe0;
-            --danger: #d64545;
-        }
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-            background:
-                radial-gradient(circle at 15% 20%, rgba(15, 111, 255, 0.08), transparent 36%),
-                radial-gradient(circle at 85% 10%, rgba(61, 201, 179, 0.12), transparent 34%),
-                var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            padding: 24px;
-        }
-        .container {
-            max-width: 980px;
-            margin: 0 auto;
-            background: var(--card);
-            border: 1px solid var(--line);
-            border-radius: 16px;
-            box-shadow: 0 12px 30px rgba(26, 39, 68, 0.08);
-            overflow: hidden;
-        }
-        .header {
-            padding: 24px;
-            border-bottom: 1px solid var(--line);
-            background: linear-gradient(120deg, #eff5ff, #f8fffd);
-        }
-        .header h1 {
-            margin: 0;
-            font-size: 24px;
-        }
-        .header p {
-            margin: 8px 0 0;
-            color: var(--muted);
-        }
-        .section {
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--line);
-        }
-        .section h2 {
-            margin: 0 0 12px;
-            font-size: 18px;
-        }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-        label {
-            display: block;
-            margin: 0 0 6px;
-            font-size: 13px;
-            color: var(--muted);
-        }
-        input {
-            width: 100%;
-            border: 1px solid var(--line);
-            border-radius: 10px;
-            padding: 10px 12px;
-            font-size: 14px;
-            outline: none;
-            background: #fff;
-        }
-        input:focus {
-            border-color: var(--brand);
-            box-shadow: 0 0 0 3px rgba(15, 111, 255, 0.16);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        th, td {
-            text-align: left;
-            border-bottom: 1px solid var(--line);
-            padding: 10px 8px;
-            vertical-align: middle;
-        }
-        .actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        button {
-            border: none;
-            border-radius: 10px;
-            padding: 10px 14px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .btn-primary {
-            background: var(--brand);
-            color: #fff;
-        }
-        .btn-primary:hover { background: var(--brand-hover); }
-        .btn-secondary {
-            background: #eaf0fb;
-            color: #1f2d45;
-        }
-        .btn-danger {
-            background: #fee;
-            color: var(--danger);
-        }
-        .footer {
-            padding: 16px 24px 24px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-        .status {
-            color: var(--muted);
-            font-size: 13px;
-        }
-        @media (max-width: 760px) {
-            body { padding: 12px; }
-            .grid { grid-template-columns: 1fr; }
-            .container { border-radius: 12px; }
-            th:nth-child(2), td:nth-child(2) { min-width: 220px; }
-        }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jira Discord \u901A\u77E5\u8A2D\u5B9A</title>
+<style>
+    :root {
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #1c2230;
+        --muted: #5e6a80;
+        --line: #d9e0ec;
+        --brand: #0f6fff;
+        --brand-hover: #0d5fe0;
+        --danger: #d64545;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+        background:
+            radial-gradient(circle at 15% 20%, rgba(15, 111, 255, 0.08), transparent 36%),
+            radial-gradient(circle at 85% 10%, rgba(61, 201, 179, 0.12), transparent 34%),
+            var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 24px;
+    }
+    .container {
+        max-width: 980px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: 0 12px 30px rgba(26, 39, 68, 0.08);
+        overflow: hidden;
+    }
+    .header {
+        padding: 24px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(120deg, #eff5ff, #f8fffd);
+    }
+    .header h1 {
+        margin: 0;
+        font-size: 24px;
+    }
+    .header p {
+        margin: 8px 0 0;
+        color: var(--muted);
+    }
+    .section {
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--line);
+    }
+    .section h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+    }
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+    label {
+        display: block;
+        margin: 0 0 6px;
+        font-size: 13px;
+        color: var(--muted);
+    }
+    input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 14px;
+        outline: none;
+        background: #fff;
+    }
+    input:focus {
+        border-color: var(--brand);
+        box-shadow: 0 0 0 3px rgba(15, 111, 255, 0.16);
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+    }
+    th, td {
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+        padding: 10px 8px;
+        vertical-align: middle;
+    }
+    .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    button {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .btn-primary {
+        background: var(--brand);
+        color: #fff;
+    }
+    .btn-primary:hover { background: var(--brand-hover); }
+    .btn-secondary {
+        background: #eaf0fb;
+        color: #1f2d45;
+    }
+    .btn-danger {
+        background: #fee;
+        color: var(--danger);
+    }
+    .footer {
+        padding: 16px 24px 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .status {
+        color: var(--muted);
+        font-size: 13px;
+    }
+    @media (max-width: 760px) {
+        body { padding: 12px; }
+        .grid { grid-template-columns: 1fr; }
+        .container { border-radius: 12px; }
+        th:nth-child(2), td:nth-child(2) { min-width: 220px; }
+    }
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Jira 期限通知設定</h1>
-            <p>Jira接続情報と、通知対象プロジェクトごとのDiscord Webhookを管理します。</p>
-        </div>
+<div class="container">
+    <div class="header">
+        <h1>Jira \u671F\u9650\u901A\u77E5\u8A2D\u5B9A</h1>
+        <p>Jira\u63A5\u7D9A\u60C5\u5831\u3068\u3001\u901A\u77E5\u5BFE\u8C61\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u3054\u3068\u306EDiscord Webhook\u3092\u7BA1\u7406\u3057\u307E\u3059\u3002</p>
+    </div>
 
-        <div class="section">
-            <h2>Jira接続情報</h2>
-            <div class="grid">
-                <div>
-                    <label for="jiraDomain">Jira Domain</label>
-                    <input id="jiraDomain" placeholder="example.atlassian.net" />
-                </div>
-                <div>
-                    <label for="jiraEmail">Jira Email</label>
-                    <input id="jiraEmail" placeholder="user@example.com" />
-                </div>
-                <div style="grid-column: 1 / -1;">
-                    <label for="jiraApiToken">Jira API Token</label>
-                    <input id="jiraApiToken" type="password" placeholder="API token" />
-                </div>
+    <div class="section">
+        <h2>Jira\u63A5\u7D9A\u60C5\u5831</h2>
+        <div class="grid">
+            <div>
+                <label for="jiraDomain">Jira Domain</label>
+                <input id="jiraDomain" placeholder="example.atlassian.net" />
             </div>
-        </div>
-
-        <div class="section">
-            <h2>通知プロジェクト</h2>
-            <div class="actions">
-                <button class="btn-secondary" type="button" onclick="addProjectRow()">+ プロジェクト追加</button>
+            <div>
+                <label for="jiraEmail">Jira Email</label>
+                <input id="jiraEmail" placeholder="user@example.com" />
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th style="width: 220px;">Project Key</th>
-                        <th>Discord Webhook URL</th>
-                        <th style="width: 96px;">操作</th>
-                    </tr>
-                </thead>
-                <tbody id="projectsBody"></tbody>
-            </table>
-        </div>
-
-        <div class="footer">
-            <button class="btn-secondary" type="button" onclick="testConnections()">接続テスト</button>
-            <button class="btn-secondary" type="button" onclick="sendTestNotification()">通知テスト送信</button>
-            <button class="btn-primary" type="button" onclick="saveSettings()">設定を保存</button>
-            <span class="status" id="status">読み込み中...</span>
+            <div style="grid-column: 1 / -1;">
+                <label for="jiraApiToken">Jira API Token</label>
+                <input id="jiraApiToken" type="password" placeholder="API token" />
+            </div>
         </div>
     </div>
 
-    <script>
-        function setStatus(text) {
-            document.getElementById('status').textContent = text;
-        }
+    <div class="section">
+        <h2>\u901A\u77E5\u30D7\u30ED\u30B8\u30A7\u30AF\u30C8</h2>
+        <div class="actions">
+            <button class="btn-secondary" type="button" onclick="addProjectRow()">+ \u30D7\u30ED\u30B8\u30A7\u30AF\u30C8\u8FFD\u52A0</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 220px;">Project Key</th>
+                    <th>Discord Webhook URL</th>
+                    <th style="width: 96px;">\u64CD\u4F5C</th>
+                </tr>
+            </thead>
+            <tbody id="projectsBody"></tbody>
+        </table>
+    </div>
 
-        function addProjectRow(project) {
-            const body = document.getElementById('projectsBody');
-            const tr = document.createElement('tr');
-            const projectKey = project ? escapeHtml(project.projectKey || '') : '';
-            const webhookUrl = project ? escapeHtml(project.discordWebhookUrl || '') : '';
-            tr.innerHTML =
-                '<td><input class="projectKey" placeholder="ABC" value="' + projectKey + '" /></td>' +
-                '<td><input class="webhookUrl" placeholder="https://discord.com/api/webhooks/..." value="' + webhookUrl + '" /></td>' +
-                '<td><button class="btn-danger" type="button">削除</button></td>';
-            tr.querySelector('button').addEventListener('click', function () {
-                tr.remove();
-            });
-            body.appendChild(tr);
-        }
+    <div class="footer">
+        <button class="btn-secondary" type="button" onclick="testConnections()">\u63A5\u7D9A\u30C6\u30B9\u30C8</button>
+        <button class="btn-secondary" type="button" onclick="sendTestNotification()">\u901A\u77E5\u30C6\u30B9\u30C8\u9001\u4FE1</button>
+        <button class="btn-primary" type="button" onclick="saveSettings()">\u8A2D\u5B9A\u3092\u4FDD\u5B58</button>
+        <span class="status" id="status">\u8AAD\u307F\u8FBC\u307F\u4E2D...</span>
+    </div>
+</div>
 
-        function escapeHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
-        }
+<script>
+    function setStatus(text) {
+        document.getElementById('status').textContent = text;
+    }
 
-        function collectProjects() {
-            const rows = Array.from(document.querySelectorAll('#projectsBody tr'));
-            return rows.map(function (row) {
-                return {
-                    projectKey: row.querySelector('.projectKey').value.trim(),
-                    discordWebhookUrl: row.querySelector('.webhookUrl').value.trim()
-                };
-            }).filter(function (p) {
-                return p.projectKey && p.discordWebhookUrl;
-            });
-        }
+    function addProjectRow(project) {
+        const body = document.getElementById('projectsBody');
+        const tr = document.createElement('tr');
+        const projectKey = project ? escapeHtml(project.projectKey || '') : '';
+        const webhookUrl = project ? escapeHtml(project.discordWebhookUrl || '') : '';
+        tr.innerHTML =
+            '<td><input class="projectKey" placeholder="ABC" value="' + projectKey + '" /></td>' +
+            '<td><input class="webhookUrl" placeholder="https://discord.com/api/webhooks/..." value="' + webhookUrl + '" /></td>' +
+            '<td><button class="btn-danger" type="button">\u524A\u9664</button></td>';
+        tr.querySelector('button').addEventListener('click', function () {
+            tr.remove();
+        });
+        body.appendChild(tr);
+    }
 
-        function saveSettings() {
-            const payload = getCurrentFormSettings();
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
 
-            setStatus('保存中...');
-            google.script.run
-                .withSuccessHandler(function (result) {
-                    setStatus(result.message);
-                })
-                .withFailureHandler(function (error) {
-                    setStatus('保存失敗: ' + error.message);
-                })
-                .saveSettingsFromUi(payload);
-        }
-
-        function testConnections() {
-            const payload = getCurrentFormSettings();
-
-            setStatus('接続テスト中...');
-            google.script.run
-                .withSuccessHandler(function (result) {
-                    setStatus(result.message);
-                })
-                .withFailureHandler(function (error) {
-                    setStatus('接続テスト失敗: ' + error.message);
-                })
-                .testConnectionsFromUi(payload);
-        }
-
-        function sendTestNotification() {
-            const payload = getCurrentFormSettings();
-
-            setStatus('通知テスト送信中...');
-            google.script.run
-                .withSuccessHandler(function (result) {
-                    setStatus(result.message);
-                })
-                .withFailureHandler(function (error) {
-                    setStatus('通知テスト失敗: ' + error.message);
-                })
-                .sendTestNotificationFromUi(payload);
-        }
-
-        function getCurrentFormSettings() {
+    function collectProjects() {
+        const rows = Array.from(document.querySelectorAll('#projectsBody tr'));
+        return rows.map(function (row) {
             return {
-                jiraDomain: document.getElementById('jiraDomain').value.trim(),
-                jiraEmail: document.getElementById('jiraEmail').value.trim(),
-                jiraApiToken: document.getElementById('jiraApiToken').value.trim(),
-                jiraProjects: collectProjects()
+                projectKey: row.querySelector('.projectKey').value.trim(),
+                discordWebhookUrl: row.querySelector('.webhookUrl').value.trim()
             };
-        }
+        }).filter(function (p) {
+            return p.projectKey && p.discordWebhookUrl;
+        });
+    }
 
-        function loadSettings() {
-            google.script.run
-                .withSuccessHandler(function (settings) {
-                    document.getElementById('jiraDomain').value = settings.jiraDomain || '';
-                    document.getElementById('jiraEmail').value = settings.jiraEmail || '';
-                    document.getElementById('jiraApiToken').value = settings.jiraApiToken || '';
-                    const body = document.getElementById('projectsBody');
-                    body.innerHTML = '';
-                    if (settings.jiraProjects && settings.jiraProjects.length > 0) {
-                        settings.jiraProjects.forEach(addProjectRow);
-                    } else {
-                        addProjectRow();
-                    }
-                    setStatus('設定を読み込みました。');
-                })
-                .withFailureHandler(function (error) {
-                    setStatus('読み込み失敗: ' + error.message);
-                })
-                .getSettingsForUi();
-        }
+    function saveSettings() {
+        const payload = getCurrentFormSettings();
 
-        loadSettings();
-    </script>
+        setStatus('\u4FDD\u5B58\u4E2D...');
+        google.script.run
+            .withSuccessHandler(function (result) {
+                setStatus(result.message);
+            })
+            .withFailureHandler(function (error) {
+                setStatus('\u4FDD\u5B58\u5931\u6557: ' + error.message);
+            })
+            .saveSettingsFromUi(payload);
+    }
+
+    function testConnections() {
+        const payload = getCurrentFormSettings();
+
+        setStatus('\u63A5\u7D9A\u30C6\u30B9\u30C8\u4E2D...');
+        google.script.run
+            .withSuccessHandler(function (result) {
+                setStatus(result.message);
+            })
+            .withFailureHandler(function (error) {
+                setStatus('\u63A5\u7D9A\u30C6\u30B9\u30C8\u5931\u6557: ' + error.message);
+            })
+            .testConnectionsFromUi(payload);
+    }
+
+    function sendTestNotification() {
+        const payload = getCurrentFormSettings();
+
+        setStatus('\u901A\u77E5\u30C6\u30B9\u30C8\u9001\u4FE1\u4E2D...');
+        google.script.run
+            .withSuccessHandler(function (result) {
+                setStatus(result.message);
+            })
+            .withFailureHandler(function (error) {
+                setStatus('\u901A\u77E5\u30C6\u30B9\u30C8\u5931\u6557: ' + error.message);
+            })
+            .sendTestNotificationFromUi(payload);
+    }
+
+    function getCurrentFormSettings() {
+        return {
+            jiraDomain: document.getElementById('jiraDomain').value.trim(),
+            jiraEmail: document.getElementById('jiraEmail').value.trim(),
+            jiraApiToken: document.getElementById('jiraApiToken').value.trim(),
+            jiraProjects: collectProjects()
+        };
+    }
+
+    function loadSettings() {
+        google.script.run
+            .withSuccessHandler(function (settings) {
+                document.getElementById('jiraDomain').value = settings.jiraDomain || '';
+                document.getElementById('jiraEmail').value = settings.jiraEmail || '';
+                document.getElementById('jiraApiToken').value = settings.jiraApiToken || '';
+                const body = document.getElementById('projectsBody');
+                body.innerHTML = '';
+                if (settings.jiraProjects && settings.jiraProjects.length > 0) {
+                    settings.jiraProjects.forEach(addProjectRow);
+                } else {
+                    addProjectRow();
+                }
+                setStatus('\u8A2D\u5B9A\u3092\u8AAD\u307F\u8FBC\u307F\u307E\u3057\u305F\u3002');
+            })
+            .withFailureHandler(function (error) {
+                setStatus('\u8AAD\u307F\u8FBC\u307F\u5931\u6557: ' + error.message);
+            })
+            .getSettingsForUi();
+    }
+
+    loadSettings();
+<\/script>
 </body>
 </html>`;
 }
+function doGet() {
+    return HtmlService.createHtmlOutput(getSettingsPageHtml()).setTitle(
+        'Jira Discord \u901A\u77E5\u8A2D\u5B9A'
+    );
+}
+
+// src/main.ts
+globalThis.doGet = doGet;
+globalThis.notifyTasksFor830 = notifyTasksFor830;
+globalThis.notifyTasksFor930 = notifyTasksFor930;
+globalThis.getSettingsForUi = getSettingsForUi;
+globalThis.saveSettingsFromUi = saveSettingsFromUi;
+globalThis.testConnectionsFromUi = testConnectionsFromUi;
+globalThis.sendTestNotificationFromUi = sendTestNotificationFromUi;
