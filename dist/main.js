@@ -145,13 +145,17 @@ function sendToDiscord(payload, webhookUrl) {
     if (!payload) {
         return false;
     }
+    const proxiedWebhookUrl = webhookUrl.replace(
+        'discord.com',
+        'discord-webhook-proxy.tinpani138-haru.workers.dev'
+    );
     const options = {
         method: 'post',
         contentType: 'application/json',
         payload: JSON.stringify(payload)
     };
     try {
-        const response = UrlFetchApp.fetch(webhookUrl, options);
+        const response = UrlFetchApp.fetch(proxiedWebhookUrl, options);
         const code = response.getResponseCode();
         if (code >= 200 && code < 300) {
             return true;

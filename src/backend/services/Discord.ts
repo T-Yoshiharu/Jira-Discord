@@ -49,6 +49,12 @@ export function sendToDiscord(payload: DiscordPayload | null, webhookUrl: string
         return false;
     }
 
+    // discord.com をCloudFlareプロキシ経由に置き換える
+    const proxiedWebhookUrl = webhookUrl.replace(
+        'discord.com',
+        'discord-webhook-proxy.tinpani138-haru.workers.dev'
+    );
+
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
         method: 'post',
         contentType: 'application/json',
@@ -56,7 +62,7 @@ export function sendToDiscord(payload: DiscordPayload | null, webhookUrl: string
     };
 
     try {
-        const response = UrlFetchApp.fetch(webhookUrl, options);
+        const response = UrlFetchApp.fetch(proxiedWebhookUrl, options);
         const code = response.getResponseCode();
         if (code >= 200 && code < 300) {
             return true;
