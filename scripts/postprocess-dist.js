@@ -29,4 +29,45 @@ if (!content.endsWith('\n')) {
     content += '\n';
 }
 
+// If the bundle is wrapped in a top-level IIFE like `(() => { ... })();`,
+// unwrap it so functions and assignments become top-level for GAS.
+// Preserve a leading "'use strict';\n" if present.
+(() => {
+    const useStrictMatch = content.match(/^(?:\s*(?:'use strict'|"use strict")?;?\s*\n)?/);
+    const prefix = useStrictMatch ? useStrictMatch[0] : '';
+    const rest = content.slice(prefix.length);
+
+    // Detect IIFE opening at start of rest
+    const openPatterns = [/^\s*\(\s*\(\s*\)\s*=>\s*{\s*\n/, /^\s*\(\s*function\s*\(\)\s*{\s*\n/];
+    let openMatch = null;
+    for (const p of openPatterns) {
+        const m = rest.match(p);
+        if (m) {
+            openMatch = m[0];
+            break;
+        }
+    }
+
+    if (openMatch) {
+        // Find last occurrence of typical IIFE closing patterns
+        const closeCandidates = ['\n})();', '\n}());', '\n})();\n', '\n}());\n', '})();', '}());'];
+        let closeIndex = -1;
+        for (const cand of closeCandidates) {
+            const idx = rest.lastIndexOf(cand);
+            if (idx !== -1) {
+                closeIndex = idx;
+                break;
+            }
+        }
+
+        if (closeIndex !== -1) {
+            const inner = rest.slice(openMatch.length, closeIndex + 1); // include final '}'
+            // Remove a single level of leading indentation (a tab or up to 4 spaces) if present
+            const dedented = inner.replace(/^ {1,4}|\t/gm, '');
+            content = prefix + dedented;
+            if (!content.endsWith('\n')) content += '\n';
+        }
+    }
+})();
+
 fs.writeFileSync(targetFile, content, 'utf8');
